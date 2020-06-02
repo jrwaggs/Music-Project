@@ -66,12 +66,13 @@ tags_dictionary = {key:list(set(tags_dictionary[key])) for key in tags_dictionar
 # In[ ]:
 
 
-def get_edges(dictionary,label):
+def get_edges(dictionary,label, pop_weight = True, weight = 0):
     """Create a list of edges from a dictionary.
 
     Create a list of labeled edges for a network graph by comparing the values (artists)
     of each key (band) in a dictionary.  If two values share a key, return a list of
-    (key,key,{link:shared value}) tuples.
+    (key,key,{link:shared value}) tuples.  This function is called by the build_net function to
+    generate the edge list for graph construction.
 
     Parameters
     ----------
@@ -85,20 +86,60 @@ def get_edges(dictionary,label):
     edgelist : list of str and dict
 
     """
-    edgelist = []
+    edgelist_raw = []
     for  key, value in dictionary.items():
         for items in value:
             for key1, value1 in dictionary.items():
                 for items1 in value1:
                     if len(items) > 1 and len(items1) > 1: # Prevent single letter artists
                                                          # ('G' or 'K') from linking with
-                        if items in items1:              # every artist with a g or k in their name.
-                            edgelist.append((key,key1,{label:items}))
+                                                         # every artist with a g or k in their name.                        
+                        
+                        if items in items1:
+                            if pop_weight == True:
+                                # adding to the edge attributes the average of the Yahoo! rating count between two artists
+                                
+                                #solve for df having multiple entires for artist ratings
+                                if key in ratings.index:
+                                    rating1 = ratings.loc[key, 'yahoo_rating_count'].astype(int)
+                                    
+                                    # TEMP - there may be multiple artists in the ratings file.  if this is the case,
+                                    # select the first value in the series.  Remove when ratings file is consolidated. 
+                                    if type(rating1) == pd.core.series.Series:
+                                        rating1 = list(ratings.loc[key, 'yahoo_rating_count'])[0]
+                                else:
+                                    rating1 = 1
+                                
+                                if key1 in ratings.index:
+                                    rating2 = ratings.loc[key1, 'yahoo_rating_count'].astype(int)
+                                    
+                                    if type(rating2) == pd.core.series.Series:
+                                        rating2 = list(ratings.loc[key1, 'yahoo_rating_count'])[0]
+                                else:
+                                    rating2 = 1
+                                
+                                avg_rating = (rating1 + rating2) / 2 # average rating between two connected artists
+                                                                     # ex. The Beatles (1000) <--> The Who (500)
+                                                                     # = 750 edge weight.
+                                 
+                                norm_rating = avg_rating / 783871    # naive normalize average rating onto a 0 - 1 scale.
+                                                                     # 783871 is the highest rating in the Yahoo! data
+                                
+                               # # check to that the edge does not already exist in edge_list
+                               # if (key,key1,{label:items, 'weight':norm_rating}) not in edgelist_raw:
+                                
+                                edgelist_raw.append((key,key1,{label:items, 'weight':norm_rating}))
+                            
+                            # return edgelist without edge weight passed to function
+                            else:
+                                edgelist_raw.append((key,key1,{label:items, 'weight':weight}))
 
+    # remove duplicate edges from edgelist_raw
+    edgelist = []
+    edgelist = [i for i in edgelist_raw if i not in edgelist]
+    
     return edgelist
 
-
-# In[ ]:
 
 
 def build_net(seed, goal=None, size=600, graph=True):
@@ -180,7 +221,8 @@ def build_net(seed, goal=None, size=600, graph=True):
                                                     # are added to the band list (see note below)
         while len(band_list) < size and go == True:
 
-            if len(band_list) > prev_band_len or len(artist_list) > prev_art_len:  # check that the len of bandlist has increased, if not
+            if len(band_list) > prev_band_len or len(artist_list) > prev_art_len:  
+                                                        # check that the len of bandlist has increased, if not
                 prev_art_len = len(artist_list)         # set go = no.  added to prevent infinite loops caused
                 prev_band_len = len(band_list)          # by artists who have only worked solo ex Madonna.
 
@@ -258,9 +300,9 @@ def add_tag_edges(graph, just_edges=False):
 
     new_graph = nx.MultiGraph()
 
-    new_graph.add_nodes_from(graph.nodes()) # add nodes from original graph
+    #new_graph.add_nodes_from(graph.nodes()) # add nodes from original graph
 
-    new_graph.add_edges_from(graph.edges()) # add edges from original graph
+    new_graph.add_edges_from(graph.edges.data()) # add edges w/attribute dictionary from original graph
 
     bands = [node for node in graph.nodes()]
 
@@ -269,7 +311,8 @@ def add_tag_edges(graph, just_edges=False):
                                                       # in tags_dictionary.
 
     #if len(dictionary.keys()) >= 2:                   # comparing keys requires atleast two keys
-    tag_edges = get_edges(dictionary,'User-Tag')
+    
+    tag_edges = get_edges(dictionary,'User-Tag', pop_weight = False, weight = 0.05) #<<<--- hard-coded tag-edge weight.
 
     for i in tag_edges:          # remove single edge loops from edge list
         if i[0] == i[1]:         # ex. ('The Who','The Who',{'LINK':'classic rock'})
@@ -284,9 +327,6 @@ def add_tag_edges(graph, just_edges=False):
             new_graph.add_edges_from(tag_edges)
 
             return new_graph
-
-
-# In[ ]:
 
 
 def new_centrality(graph):
